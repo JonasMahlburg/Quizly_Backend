@@ -33,18 +33,18 @@ creating a new User instance.
 
 Fields:
     id (int): User ID (read-only).
-    fullname (str): Full name of the user (used to construct first and last name).
+    username (str): Full name of the user (used to construct first and last name).
     email (str): Email address of the user.
     password (str): Password (write-only).
     repeated_password (str): Password confirmation (write-only).
 """
     email = serializers.EmailField(required=True)
-    repeated_password = serializers.CharField(write_only=True)
-    fullname = serializers.CharField(write_only=True, allow_blank=False)
+    confirmed_password = serializers.CharField(write_only=True)
+    username = serializers.CharField(write_only=True, allow_blank=False)
 
     class Meta:
         model = User
-        fields = ['id', 'fullname', 'email', 'password', 'repeated_password']
+        fields = ['id', 'username', 'email', 'password', 'confirmed_password']
         extra_kwargs = {
             'password': {
                 'write_only': True
@@ -62,23 +62,23 @@ Fields:
             serializers.ValidationError: If passwords don't match or email is already used.
         """
         pw = self.validated_data.pop('password')
-        repeated_pw = self.validated_data.pop('repeated_password')
-        fullname = self.validated_data.pop('fullname').title()
+        confirmed_pw = self.validated_data.pop('confirmed_password')
+        username = self.validated_data.pop('username').title()
 
-        if pw != repeated_pw:
+        if pw != confirmed_pw:
             raise serializers.ValidationError({'error': 'Passwords do not match'})
 
         if User.objects.filter(email=self.validated_data['email']).exists():
             raise serializers.ValidationError({'error': 'This email is already taken'})
 
-        base_username = fullname.strip().replace(" ", "").lower()
+        base_username = username.strip().replace(" ", "").lower()
         username = base_username
         counter = 1
         while User.objects.filter(username=username).exists():
             username = f"{base_username}{counter}"
             counter += 1
 
-        names = fullname.split()
+        names = username.split()
         first_name = names[0] if len(names) > 0 else ""
         last_name = " ".join(names[1:]) if len(names) > 1 else ""
 

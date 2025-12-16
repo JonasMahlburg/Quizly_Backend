@@ -60,10 +60,11 @@ class RegistrationView(APIView):
             saved_account = serializer.save()
             token, _ = Token.objects.get_or_create(user=saved_account)
             data = {
-                'token': token.key,
-                'fullname': f"{saved_account.first_name} {saved_account.last_name}".strip(),
-                'email': saved_account.email,
-                'user_id': saved_account.id
+                # 'token': token.key,
+                # 'username': f"{saved_account.first_name} {saved_account.last_name}".strip(),
+                # 'email': saved_account.email,
+                # 'user_id': saved_account.id
+                'detail' : "User created successfully!"
             }
             return Response(data, status=status.HTTP_201_CREATED)
         else:
@@ -96,10 +97,10 @@ class CustomLogInView(ObtainAuthToken):
         if serializer.is_valid():
             user = serializer.validated_data['user']
             token, _ = Token.objects.get_or_create(user=user)
-            fullname = f"{user.first_name} {user.last_name}".strip()
+            username = f"{user.first_name} {user.last_name}".strip()
             data = {
                 'token': token.key,
-                'fullname': fullname,
+                'username': username,
                 'email': user.email,
                 'user_id': user.id
             }
@@ -130,6 +131,6 @@ class EmailCheckView(APIView):
         return Response({
             'id': user.id,
             'email': user.email,
-            'fullname': f"{user.first_name} {user.last_name}".strip()
+            'username': f"{user.first_name} {user.last_name}".strip()
         })
     
