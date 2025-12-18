@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from user_auth_app.models import UserProfile
 from .serializers import RegistrationSerializer, EmailAuthTokenSerializer
 from rest_framework.views import APIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.response import Response
@@ -11,6 +11,8 @@ from rest_framework.response import Response
 import jwt
 from django.conf import settings
 from datetime import datetime, timedelta
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import AuthenticationFailed
 
 
 class UserProfileList(generics.ListCreateAPIView):
@@ -153,6 +155,105 @@ class CustomLogInView(ObtainAuthToken):
         except Exception as e:
             # Don't leak internal error details to clients
             return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class LogoutView(APIView):
+    """
+    API view to log out user, delete tokens and clear auth cookies.
+
+    Requires authentication.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            user = request.user
+            # Delete DRF Token(s) associated with this user
+            Token.objects.filter(user=user).delete()
+
+            response = Response({
+                'detail': 'Log-Out successfully! All Tokens will be deleted. Refresh token is now invalid.'
+            }, status=status.HTTP_200_OK)
+
+            # Remove auth cookies
+            response.delete_cookie('access_token', path='/')
+            response.delete_cookie('refresh_token', path='/')
+
+            return response
+        except Exception:
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RefreshTokenCookieAuthentication(BaseAuthentication):
+    """Authenticate requests using the `refresh_token` cookie (JWT).
+
+    This will raise AuthenticationFailed (401) when the cookie is missing
+    or invalid. On success it returns `(user, None)`.
+    """
+    def authenticate(self, request):
+        token = request.COOKIES.get('refresh_token')
+        if not token:
+            raise AuthenticationFailed('Refresh token missing')
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+        except jwt.ExpiredSignatureError:
+            raise AuthenticationFailed('Refresh token expired')
+        except jwt.InvalidTokenError:
+            raise AuthenticationFailed('Invalid refresh token')
+
+        if payload.get('type') != 'refresh' or 'user_id' not in payload:
+            raise AuthenticationFailed('Invalid refresh token')
+
+        try:
+            user = User.objects.get(id=payload['user_id'])
+        except User.DoesNotExist:
+            raise AuthenticationFailed('User not found')
+
+        return (user, None)
+
+
+class RefreshTokenView(APIView):
+    """
+    API view to refresh access token using refresh_token cookie.
+
+    Requires authentication via the `refresh_token` cookie.
+    On success returns a new access token and sets it as HttpOnly cookie.
+    """
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [RefreshTokenCookieAuthentication]
+
+    def post(self, request):
+        try:
+            # At this point authentication has run and request.user is set
+            user = request.user
+
+            access_payload = {
+                'user_id': user.id,
+                'type': 'access',
+                'exp': datetime.utcnow() + timedelta(minutes=15)
+            }
+            new_access = jwt.encode(access_payload, settings.SECRET_KEY, algorithm='HS256')
+
+            response = Response({'detail': 'Token refreshed', 'access': new_access}, status=status.HTTP_200_OK)
+
+            secure = not getattr(settings, 'DEBUG', False)
+            response.set_cookie(
+                'access_token',
+                new_access,
+                httponly=True,
+                secure=secure,
+                samesite='Lax',
+                max_age=15 * 60,
+                path='/'
+            )
+
+            return response
+
+        except AuthenticationFailed as e:
+            return Response({'error': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception:
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class EmailCheckView(APIView):
     """
     API view to check if a user exists with the provided email.
