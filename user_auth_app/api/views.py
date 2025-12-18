@@ -8,6 +8,10 @@ from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.response import Response
 
+import jwt
+from django.conf import settings
+from datetime import datetime, timedelta
+
 
 class UserProfileList(generics.ListCreateAPIView):
     """
@@ -74,43 +78,81 @@ class RegistrationView(APIView):
 
 class CustomLogInView(ObtainAuthToken):
     """
-    API view for user login using token authentication.
+    API view for user login. Authenticates user and sets auth cookies.
 
-    Authenticates user based on provided email and password.
-    Returns token and user information on success.
-
-    Methods:
-        post(): Authenticates and logs in the user.
+    On success returns a JSON body with a detail message and user info,
+    and sets `access_token` and `refresh_token` as HttpOnly cookies.
     """
-    permission_classes= [AllowAny]
-    serializer_class= EmailAuthTokenSerializer  
+    permission_classes = [AllowAny]
+    serializer_class = EmailAuthTokenSerializer
 
     def post(self, request):
         serializer = self.serializer_class(
             data={
-                'email': request.data.get('email'),
+                'username': request.data.get('username'),
                 'password': request.data.get('password')
             },
             context={'request': request}
         )
 
-        if serializer.is_valid():
-            user = serializer.validated_data['user']
-            token, _ = Token.objects.get_or_create(user=user)
-            username = f"{user.first_name} {user.last_name}".strip()
-            data = {
-                'token': token.key,
-                'username': username,
-                'email': user.email,
-                'user_id': user.id
-            }
-            return Response(data)
-        else:
-            return Response(
-                {'error': 'Invalid email or password'},
-                status=status.HTTP_400_BAD_REQUEST)
-            
+        try:
+            if not serializer.is_valid():
+                return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
 
+            user = serializer.validated_data['user']
+
+            # Generate JWT access and refresh tokens
+            access_payload = {
+                'user_id': user.id,
+                'type': 'access',
+                'exp': datetime.utcnow() + timedelta(minutes=15)
+            }
+            refresh_payload = {
+                'user_id': user.id,
+                'type': 'refresh',
+                'exp': datetime.utcnow() + timedelta(days=7)
+            }
+
+            access_token = jwt.encode(access_payload, settings.SECRET_KEY, algorithm='HS256')
+            refresh_token = jwt.encode(refresh_payload, settings.SECRET_KEY, algorithm='HS256')
+
+            response_data = {
+                'detail': 'Login successfully!',
+                'user': {
+                    'id': user.id,
+                    'username': f"{user.first_name} {user.last_name}".strip() or user.username,
+                    'email': user.email
+                }
+            }
+
+            response = Response(response_data, status=status.HTTP_200_OK)
+
+            # Cookie attributes
+            secure = not getattr(settings, 'DEBUG', False)
+            response.set_cookie(
+                'access_token',
+                access_token,
+                httponly=True,
+                secure=secure,
+                samesite='Lax',
+                max_age=15 * 60,
+                path='/'
+            )
+            response.set_cookie(
+                'refresh_token',
+                refresh_token,
+                httponly=True,
+                secure=secure,
+                samesite='Lax',
+                max_age=7 * 24 * 3600,
+                path='/'
+            )
+
+            return response
+
+        except Exception as e:
+            # Don't leak internal error details to clients
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 class EmailCheckView(APIView):
     """
     API view to check if a user exists with the provided email.
